@@ -9,7 +9,7 @@ def sample_func(sample, *args):
     labels = []
     for i,element in enumerate(sample):
         if i==0:
-            labels.append(element)
+            labels.append(float(element))
         if isinstance(element, str):
             ft = malan.reader.string2int(element)
             features.append(ft)
@@ -17,20 +17,37 @@ def sample_func(sample, *args):
             features.append(element)
         else:
             pass
-    return [labels, features]
+    return labels, features
 
-file_path = '/Users/fan/Malanshan/storage/dataset/train/part_1'
-filenames = []
-for r,d,f in os.walk(file_path):
-    for x in f:
-        a_file = None
-        if 'context' in x:
-            a_file = r+'/'+x
-            filenames.append(a_file)
-print(filenames)
-rd = Reader(filenames)
-gen = rd.sample_generator(gen_func=sample_func, limit=10)
-for i in range(100000):
-    sample = next(gen)
-    print(sample)
+def build_graph(label, features):
 
+    return None
+
+def start_training():
+    file_path = '/Users/fan/Malanshan/storage/dataset/train/part_1'
+    filenames = []
+    for r,d,f in os.walk(file_path):
+        for x in f:
+            a_file = None
+            if 'context' in x:
+                a_file = r+'/'+x
+                filenames.append(a_file)
+    print(filenames)
+    rd = Reader(filenames)
+    dataset = rd.dataset(tensor_types=(tf.float32, tf.int32),
+                         sample_deal_func = sample_func, generator_limit=10)
+    print('check0, ', dataset)
+
+    iterator = dataset.make_initializable_iterator()
+    print('check1, ', iterator)
+    init = iterator.initializer
+    next_batch = iterator.get_next()
+
+    with tf.Session() as sess:
+        sess.run(init)
+        for i in range(13):
+            res = sess.run(next_batch)
+            print(res)
+
+if __name__ == "__main__":
+    start_training()

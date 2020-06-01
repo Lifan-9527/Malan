@@ -44,12 +44,13 @@ class Reader(object):
         self.batch_size = batch_size
         self.worker_index = worker_index
 
-    def sample_generator(self, gen_func=None, limit=None):
+    def sample_generator(self):
         """
         sample_generator construct a generator for producing one sample each time.
         :param limit: Number of samples allowed to throw out.
         :yield features: One sample.
         """
+        gen_func = self.sample_func
         assert gen_func != None, "Must use a gen_func to parse the data"
         for idx, a_file in enumerate(self.filenames):
             print('ready to deal with file: {}, schedule: {}'.format(a_file, idx/len(self.filenames)))
@@ -63,14 +64,14 @@ class Reader(object):
                 # yield a list of lists
                 yield features
                 idx += 1
-                if limit==None:
+                if self.generator_limit==None:
                     continue
                 else:
-                    if idx>=limit:
+                    if idx>=self.generator_limit:
                         break
 
-    def get_batch_detached(self, num_parallel_reads=1, max_qsize=1):
-        """
+    def _get_batch_detached(self, num_parallel_reads=1, max_qsize=1):
+        """ TODO
         Assemble batches, multiprocessing based.
         :param num_parallel_reads: number of processes concurrently running to get batches
         """
@@ -97,3 +98,28 @@ class Reader(object):
                     else:
                         print('[error] {}'.format(ex))
                         print(traceback.format_exc())
+
+    def dataset(self, num_parallel_reads=1, tensor_types=None,
+                sample_deal_func=None, generator_limit=None, batch_size=1,
+                prefetch_depth=1, cache='', repeat_times=0, shuffle_buffer_size=0):
+        self.sample_func = sample_deal_func
+        self.generator_limit = generator_limit
+        if num_parallel_reads==1:
+            ds = tf.data.Dataset.from_generator(self.sample_generator, tensor_types)
+            if batch_size > 1 and isinstance(batch_size, int):
+                ds = ds.batch(batch_size)
+            if prefetch_depth > 1 and isinstance(prefetch_depth, int):
+                ds = ds.prefetch(prefetch_depth)
+            if len(cache) > 0 and isinstance(cache, str):
+                ds = ds.cache(cache)
+            if repeat_times > 0 and isinstance(repeat_times, int):
+                ds = ds.repeat(count=repeat_times)
+            if shuffle_buffer_size > 0:
+                ds = ds.shuffle(shuffle_buffer_size)
+
+            return ds
+
+        if num_parallel_reads > 1:
+            ds = None
+
+        return ds
