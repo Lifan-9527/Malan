@@ -3,7 +3,19 @@ import tensorflow as tf
 import numpy as np
 import os, time, sys, traceback
 
-def reader_test():
+def sample_func(sample, *args):
+    features = []
+    for element in sample:
+        if isinstance(element, str):
+            ft = reader.string2int(element)
+            features.append(ft)
+        elif isinstance(element, int):
+            features.append(element)
+        else:
+            pass
+    return features
+
+def sample_generator_test():
     file_path = '/Users/fan/Malanshan/storage/dataset/train/part_1'
     filenames = []
     for r,d,f in os.walk(file_path):
@@ -14,20 +26,16 @@ def reader_test():
                 filenames.append(a_file)
     print(filenames)
     rd = reader.Reader(filenames)
-    gen = rd.sample_generator()
+    gen = rd.sample_generator(gen_func=sample_func, limit=10)
     for i in range(100000):
         sample = next(gen)
-        #print(sample)
-        #if i % 1000 == 0:
         print(sample)
 
 if __name__ == "__main__":
     scale = time.time()
     try:
-        reader_test()import tensorflow as tf
-import rest
+        sample_generator_test()
 
-class
     except Exception as ex:
         print(ex)
         print(type(ex))

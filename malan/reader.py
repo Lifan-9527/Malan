@@ -44,12 +44,13 @@ class Reader(object):
         self.batch_size = batch_size
         self.worker_index = worker_index
 
-    def sample_generator(self, limit=None):
+    def sample_generator(self, gen_func=None, limit=None):
         """
         sample_generator construct a generator for producing one sample each time.
         :param limit: Number of samples allowed to throw out.
         :yield features: One sample.
         """
+        assert gen_func != None, "Must use a gen_func to parse the data"
         for idx, a_file in enumerate(self.filenames):
             print('ready to deal with file: {}, schedule: {}'.format(a_file, idx/len(self.filenames)))
             df = load_data(a_file)
@@ -57,15 +58,9 @@ class Reader(object):
             idx = 0
             num_samples = datas.shape[0]
             while idx < num_samples:
-                features = []
-                for element in datas[idx]:
-                    if isinstance(element, str):
-                        ft = string2int(element)
-                        features.append(ft)
-                    elif isinstance(element, int):
-                        features.append(element)
-                    else:
-                        pass
+                features = gen_func(datas[idx])
+
+                # yield a list of numpy.ndarray
                 yield features
                 idx += 1
                 if limit==None:
