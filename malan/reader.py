@@ -30,7 +30,7 @@ def load_data(file_path):
 def string2int(str_feature):
     assert isinstance(str_feature, str), "invalid string2int input"
     encode_feature = str.encode(str_feature)
-    tmp = hashlib.blake2b(encode_feature, digest_size=5).digest()
+    tmp = hashlib.blake2b(encode_feature, digest_size=6).digest()
     return int.from_bytes(tmp, byteorder='little')
 
 class Reader(object):
@@ -60,7 +60,7 @@ class Reader(object):
             while idx < num_samples:
                 features = gen_func(datas[idx])
 
-                # yield a list of numpy.ndarray
+                # yield a list of lists
                 yield features
                 idx += 1
                 if limit==None:
