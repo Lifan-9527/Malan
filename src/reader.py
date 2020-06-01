@@ -46,9 +46,11 @@ class Reader(object):
             print('ready to deal with file: {}, schedule: {}'.format(a_file, idx/len(self.filenames)))
             df = load_data(a_file)
             datas = df.values
-            for i, samples in datas:
+            idx = 0
+            num_samples = datas.shape[0]
+            while idx < num_samples:
                 features = []
-                for element in samples:
+                for element in datas[idx]:
                     if isinstance(element, str):
                         ft = string2int(element)
                         features.append(ft)
@@ -57,3 +59,4 @@ class Reader(object):
                     else:
                         pass
                 yield features
+                idx += 1
