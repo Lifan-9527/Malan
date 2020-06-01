@@ -11,6 +11,9 @@ import pandas as pd
 import pyarrow.parquet as pq
 import hashlib
 
+import multiprocessing
+from multiprocessing import Queue, Process, Value
+
 # Submodule import
 from tensorflow.python.ops import data_flow_ops
 from tensorflow.python.client import timeline
@@ -41,7 +44,12 @@ class Reader(object):
         self.batch_size = batch_size
         self.worker_index = worker_index
 
-    def sample_generator(self):
+    def sample_generator(self, limit=None):
+        """
+        sample_generator construct a generator for producing one sample each time.
+        :param limit: Number of samples allowed to throw out.
+        :yield features: One sample.
+        """
         for idx, a_file in enumerate(self.filenames):
             print('ready to deal with file: {}, schedule: {}'.format(a_file, idx/len(self.filenames)))
             df = load_data(a_file)
@@ -60,3 +68,21 @@ class Reader(object):
                         pass
                 yield features
                 idx += 1
+                if limit==None:
+                    continue
+                else:
+                    if idx>=limit:
+                        break
+
+    def get_batch_detached(self, num_parallel_reads=1):
+        assert isinstance(num_parallel_reads, int), "num_parallel_reads must be an integer."
+        assert num_parallel_reads <= len(self.filenames), "num_parallel_reads must not exceed file numbers."
+        shard_filenames = []
+        for i in range(num_parallel_reads):
+            shard_filenames += self.filenames[i::num_parallel_reads]
+
+        def _get_sample(idx, filenames, q):
+            gen = self.sample_generator(filenames)
+            while True:
+                sample = next(gen)
+                q.put(sample, block=True)
