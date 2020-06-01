@@ -74,15 +74,31 @@ class Reader(object):
                     if idx>=limit:
                         break
 
-    def get_batch_detached(self, num_parallel_reads=1):
+    def get_batch_detached(self, num_parallel_reads=1, max_qsize=1):
+        """
+        Assemble batches, multiprocessing based.
+        :param num_parallel_reads: number of processes concurrently running to get batches
+        """
         assert isinstance(num_parallel_reads, int), "num_parallel_reads must be an integer."
         assert num_parallel_reads <= len(self.filenames), "num_parallel_reads must not exceed file numbers."
+
+        self.q = [Queue(maxsize=max_qsize) for _ in range(num_parallel_reads)]
+
         shard_filenames = []
         for i in range(num_parallel_reads):
             shard_filenames += self.filenames[i::num_parallel_reads]
 
         def _get_sample(idx, filenames, q):
             gen = self.sample_generator(filenames)
+            batch = []
             while True:
-                sample = next(gen)
-                q.put(sample, block=True)
+                try:
+                    sample = next(gen)
+                    batch.append(sample)
+                    q.put(batch, block=True)
+                except Exception as ex:
+                    if isinstance(ex, StopIteration):
+                        print('[notice] sub-reader :{} is finished.'.format(idx))
+                    else:
+                        print('[error] {}'.format(ex))
+                        print(traceback.format_exc())

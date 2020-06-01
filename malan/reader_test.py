@@ -24,7 +24,10 @@ def reader_test():
 if __name__ == "__main__":
     scale = time.time()
     try:
-        reader_test()
+        reader_test()import tensorflow as tf
+import rest
+
+class
     except Exception as ex:
         print(ex)
         print(type(ex))
