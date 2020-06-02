@@ -22,12 +22,13 @@ def sample_func(sample, *args):
 
 
 class Trainer(object):
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
         self.nn_size = [1024, 512, 256, 1]
         self.dense_weights = []
-        self.batch_size = 4
-        self.embedding_size = 1
-        self.feature_num = 11
+        self.batch_size = config['batch_size']
+        self.embedding_size = config['emb_size']
+        self.feature_num = config['feature_num']
 
     def build_graph(self, io):
         label, features = io
@@ -36,7 +37,6 @@ class Trainer(object):
         #features = tf.reshape(features, (self.batch_size, -1))
         
         features = tf.reshape(features, [self.batch_size * self.feature_num, 1])
-        #features = tf.reshape(features, [-1, 1])
         self.ctx_var = rest.SparseVariable(
             features=features,
             dim=self.embedding_size,
@@ -46,8 +46,6 @@ class Trainer(object):
         )
 
         sparse_embedding = tf.reshape(self.ctx_var.op, [-1, 1])
-        #sparse_embedding = tf.reshape(self.ctx_var.op, [, 1])
-        print("check0: ", sparse_embedding.shape)
 
         indices = [0] * self.embedding_size * self.batch_size * self.feature_num
         for i in range(len(indices)):
@@ -56,17 +54,13 @@ class Trainer(object):
 
         deep = tf.math.segment_sum(sparse_embedding, indices)
         deep = tf.reshape(deep, (self.batch_size, 1))
-        print("check1: ", deep.shape)
 
         #####
         self.logits = deep
         predict = tf.nn.sigmoid(self.logits)
-        print("check2: ", label.shape)
-        
+
         entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=label)
-        print("check3: ", entropy.shape)
         loss = tf.reduce_mean(entropy, name='loss')
-        print("check4: ", loss.shape)
         sparse_opt = rest.SparseAdagradOptimizer(0.1, initial_accumulator_value=0.000001)
         dense_opt = tf.train.AdagradOptimizer(0.01, initial_accumulator_value=0.0000001)
         #update = tf.group([
@@ -92,7 +86,7 @@ class Trainer(object):
         self.dense_weights.append(bias)
         return tf.nn.xw_plus_b(inputs, weight, bias)
 
-def start_training():
+def start_training(config):
     file_path = '/dockerdata/oppen/playground/ft_local/Malanshan/storage/dataset/train/part_1'
     filenames = []
     for r,d,f in os.walk(file_path):
@@ -102,50 +96,39 @@ def start_training():
                 a_file = r+'/'+x
                 filenames.append(a_file)
     print(filenames)
-    rd = Reader(filenames)
+    rd = Reader(filenames, config)
     dataset = rd.dataset(tensor_types=(tf.float32, tf.int32),
                          sample_deal_func = sample_func, generator_limit=None,
-                         batch_size = 4)
+                         batch_size = config['batch_size'])
 
     iterator = dataset.make_initializable_iterator()
     init = iterator.initializer
     next_batch = iterator.get_next()
 
-    trainer = Trainer()
+    trainer = Trainer(config)
     labels, predict, loss, update = trainer.build_graph(next_batch)
     with tf.Session() as sess:
         sess.run(init)
         
         for step in range(1000):
             sess.run(update)
-            if step % 50 == 0:
+
+            if step % config['test_leap'] == 0:
                 res = sess.run(loss)
                 print('step: {}, loss: {}'.format(step, res))
 
-        #res = sess.run(labels)
-        #print(res)
-        #res = sess.run(predict)
-        #print(res)
-        #res = sess.run(loss)
-        #print(res)
-        print('ok')
-        #for _ in range(1000):
-        #    res = sess.run(next_batch)
-        #    print(res[0].shape, res[1].shape)
-    
 
-    """
-    with tf.Session() as sess:
-        #sess.run(tf.group(tf.global_variables_initializer(), tf.local_variables_initializer()))
-        sess.run(init)
-        for i in range(100):
-            sess.run(update)
-        res = sess.run(predict)
-        print(res)
-    """
 
 if __name__ == "__main__":
+    config = {
+        'batch_size': 32,
+        'test_leap': 100,
+        'test_epochs': 32,
+        'save_leap': 2000,
+        'emb_size': 8,
+        'feature_num': 11,
+    }
     try:
-        start_training()
+        start_training(config)
     except:
         print(traceback.format_exc())
