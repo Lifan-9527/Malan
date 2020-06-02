@@ -40,7 +40,6 @@ class Trainer(object):
     def build_graph(self, io):
         label, features = io
         label = tf.reshape(label, [self.batch_size, 1])
-        print(label, features)
         #features = tf.reshape(features, (self.batch_size, -1))
         
         features = tf.reshape(features, [self.batch_size * self.feature_num, 1])
@@ -58,7 +57,6 @@ class Trainer(object):
         indices = [0] * self.embedding_size * self.batch_size * self.feature_num
         for i in range(len(indices)):
             indices[i] = int(i / (self.embedding_size *  self.feature_num))
-        print('indices', indices, len(indices))
 
         deep = tf.math.segment_sum(sparse_embedding, indices)
         deep = tf.reshape(deep, (self.batch_size, 1))
@@ -97,16 +95,10 @@ class Trainer(object):
 
 def start_training(config):
     file_path = '/dockerdata/oppen/playground/ft_local/Malanshan/storage/dataset/train/part_1'
-    filenames = []
-    for r,d,f in os.walk(file_path):
-        for x in f:
-            a_file = None
-            if 'context' in x:
-                a_file = r+'/'+x
-                filenames.append(a_file)
+    filenames = malan.utils.path_to_list(file_path)
     print(filenames)
     rd = Reader(filenames, config)
-    dataset = rd.dataset(tensor_types=(tf.float32, tf.int32),
+    dataset = rd.dataset(tensor_types=(tf.float32, tf.int64),
                          sample_deal_func = sample_func, generator_limit=None,
                          batch_size = config['batch_size'])
 
@@ -119,9 +111,17 @@ def start_training(config):
     with tf.Session() as sess:
         sess.run(init)
         sess.run(tf.group(tf.global_variables_initializer(), tf.local_variables_initializer()))
-
+        start_time, step_time, step_start_time, duration = time.time(), 0, 0, 0
         for step in range(100000):
+            step_time = 0
+            step_start_time = time.time()
             sess.run(update)
+            step_time += time.time() - step_start_time
+            duration = time.time() - start_time
+
+
+            if step % config['benchmark_interval']:
+                print('[benchmark] step = {}, step_time = {}, duration = {}'.format(step, step_time, duration))
 
             # check loss, auc, and parameter size.
             if step % config['test_interval'] == 0:
@@ -138,11 +138,12 @@ def start_training(config):
                 auc_metric = auc_metric / config['test_interval']
                 loss_metric = loss_metric / config['test_interval']
 
-                print('[in-training test] auc = {}, loss = {}, feature_num = {}'.format(auc_metric, loss_metric, feature_num))
+                print('[in-training test] step = {}, auc = {}, loss = {}, feature_num = {}'.format(step, auc_metric, loss_metric, feature_num))
 
 if __name__ == "__main__":
     config = {
         'batch_size': 2048,
+        'benchmark_interval': 10,
         'test_interval': 100,
         'test_step': 32,
         'save_interval': 2000,
