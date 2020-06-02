@@ -4,6 +4,13 @@ import tensorflow as tf
 import numpy as np
 import os, time, sys, traceback
 import rest
+import sklearn
+from sklearn.metrics import roc_auc_score, accuracy_score
+
+def roc_auc_score_FIXED(y_true, y_pred):
+    if len(np.unique(y_true)) == 1: # bug in roc_auc_score
+        return accuracy_score(y_true, np.rint(y_pred))
+    return roc_auc_score(y_true, y_pred)
 
 def sample_func(sample, *args):
     features = []
@@ -42,6 +49,7 @@ class Trainer(object):
             dim=self.embedding_size,
             devices="/CPU:0",
             check_interval=1000,
+            use_default=False,
             name="ctx_var",
         )
 
@@ -61,15 +69,16 @@ class Trainer(object):
 
         entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=label)
         loss = tf.reduce_mean(entropy, name='loss')
+        auc, auc_op = tf.metrics.auc(label, predict, num_thresholds=500)
         sparse_opt = rest.SparseAdagradOptimizer(0.1, initial_accumulator_value=0.000001)
-        dense_opt = tf.train.AdagradOptimizer(0.01, initial_accumulator_value=0.0000001)
+        dense_opt = tf.train.AdagradOptimizer(0.1, initial_accumulator_value=0.000001)
         #update = tf.group([
         #                   sparse_opt.minimize(loss, var_list=[self.ctx_var]),
         #                   dense_opt.minimize(loss, var_list=self.dense_weights)])
         update = sparse_opt.minimize(loss, var_list=[self.ctx_var])
         #update = None
 
-        return label, predict, loss, update
+        return label, predict, loss, auc_op, update
 
 
     def fc(self, inputs, layer, w_shape, b_shape, name):
@@ -106,25 +115,37 @@ def start_training(config):
     next_batch = iterator.get_next()
 
     trainer = Trainer(config)
-    labels, predict, loss, update = trainer.build_graph(next_batch)
+    labels, predict, loss, auc, update = trainer.build_graph(next_batch)
     with tf.Session() as sess:
         sess.run(init)
-        
-        for step in range(1000):
+        sess.run(tf.group(tf.global_variables_initializer(), tf.local_variables_initializer()))
+
+        for step in range(100000):
             sess.run(update)
 
-            if step % config['test_leap'] == 0:
-                res = sess.run(loss)
-                print('step: {}, loss: {}'.format(step, res))
+            # check loss, auc, and parameter size.
+            if step % config['test_interval'] == 0:
+                loss_metric, auc_metric = 0, 0
+                feature_num = sess.run(trainer.ctx_var.size())
+                for _ in range(config['test_step']):
+                    _lb, _pred, _auc, _loss = sess.run([labels, predict, auc, loss])
+                    #print('check: ', _auc, _loss)
 
+                    #auc_metric += roc_auc_score_FIXED(np.asarray(_lb), np.asarray(_pred))
+                    auc_metric += _auc
+                    loss_metric += _loss
+                    #loss_metric += sklearn.metrics.log_loss(np.asarray(_lb), np.asarray(_pred))
+                auc_metric = auc_metric / config['test_interval']
+                loss_metric = loss_metric / config['test_interval']
 
+                print('[in-training test] auc = {}, loss = {}, feature_num = {}'.format(auc_metric, loss_metric, feature_num))
 
 if __name__ == "__main__":
     config = {
-        'batch_size': 32,
-        'test_leap': 100,
-        'test_epochs': 32,
-        'save_leap': 2000,
+        'batch_size': 2048,
+        'test_interval': 100,
+        'test_step': 32,
+        'save_interval': 2000,
         'emb_size': 8,
         'feature_num': 11,
     }
