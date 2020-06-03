@@ -1,11 +1,13 @@
 import os
 
-def path_to_list(path):
+def path_to_list(path, key_word=None):
     filenames = []
     for r,d,f in os.walk(path):
         for x in f:
             a_file = None
-            if 'context' in x:
-                a_file = r+'/'+x
-                filenames.append(a_file)
+            if key_word != None:
+                if key_word not in x:
+                    continue
+            a_file = r+'/'+x
+            filenames.append(a_file)
     return filenames

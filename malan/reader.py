@@ -60,6 +60,9 @@ class Reader(object):
             num_samples = datas.shape[0]
             while idx < num_samples:
                 features = gen_func(datas[idx])
+                if features == None:
+                    idx += 1
+                    continue
 
                 # yield a list of lists
                 yield features

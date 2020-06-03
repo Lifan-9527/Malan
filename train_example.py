@@ -1,5 +1,5 @@
 import malan
-from malan.reader import Reader
+
 import tensorflow as tf
 import numpy as np
 import os, time, sys, traceback
@@ -7,25 +7,18 @@ import rest
 import sklearn
 from sklearn.metrics import roc_auc_score, accuracy_score
 
+try:
+    from malan import reader
+    from malan import preprocessing
+    from malan import utils
+except:
+    print(traceback.format_exc)
+
 def roc_auc_score_FIXED(y_true, y_pred):
     if len(np.unique(y_true)) == 1: # bug in roc_auc_score
         return accuracy_score(y_true, np.rint(y_pred))
     return roc_auc_score(y_true, y_pred)
 
-def sample_func(sample, *args):
-    features = []
-    labels = []
-    for i,element in enumerate(sample):
-        if i==0:
-            labels.append(float(element))
-        if isinstance(element, str):
-            ft = malan.reader.string2int(element)
-            features.append(ft)
-        elif isinstance(element, int):
-            features.append(element)
-        else:
-            pass
-    return labels, features
 
 
 class Trainer(object):
@@ -74,7 +67,7 @@ class Trainer(object):
         #                   sparse_opt.minimize(loss, var_list=[self.ctx_var]),
         #                   dense_opt.minimize(loss, var_list=self.dense_weights)])
         update = sparse_opt.minimize(loss, var_list=[self.ctx_var])
-        #update = None
+        #update = None/
 
         return label, predict, loss, auc_op, update
 
@@ -92,14 +85,73 @@ class Trainer(object):
         self.dense_weights.append(weight)
         self.dense_weights.append(bias)
         return tf.nn.xw_plus_b(inputs, weight, bias)
+"""
+def sample_func(sample, *args):
+    features = []
+    labels = []
+    for i, element in enumerate(sample):
+        if i == 0:
+            labels.append(float(element))
+        if isinstance(element, str):
+            ft = malan.reader.string2int(element)
+            features.append(ft)
+        elif isinstance(element, int):
+            features.append(element)
+        else:
+            pass
+    return labels, features
+"""
+class CustomModule(object):
+    def __init__(self, uid_vid_map, config):
+        self.config = config
+        self.uid_vid_map = uid_vid_map
+    def sample_func(self, sample, *args):
+        """
+
+        :param sample:
+        :param args:
+        :return: features
+        """
+
+        def get_vids(uid, timestamp):
+            tstp_vids_pairs = self.uid_vid_map.get(uid, None)
+            if tstp_vids_pairs == None: return None
+            tstp = tstp_vids_pairs[:, 0]
+            pos = np.where(tstp < timestamp)
+            if pos.size < self.config['vid_window_size']:
+                return None
+            vids = tstp_vids_pairs[:, 1]
+            filtered_vids = vids[pos]
+            return filtered_vids
+
+
+        label = float(sample[0])
+        label = np.asarray(label, dtype=np.float32)
+        uid = sample[0]
+        target_vid = sample[1]
+        timestamp = sample[4]
+
+        vids = get_vids(uid, timestamp)
+        vids = np.asarray(vids, dtype=np.int32)
+        vids = vids.reshape((-1, 1))
+
+        training_vids = np.concatenate(vids, target_vid)
+
+        return label, training_vids
+
+
 
 def start_training(config):
-    file_path = '/dockerdata/oppen/playground/ft_local/Malanshan/storage/dataset/train/part_1'
-    filenames = malan.utils.path_to_list(file_path)
-    print(filenames)
-    rd = Reader(filenames, config)
+    file_path = './storage/dataset/train'
+    user_uid_vid_map = malan.preprocessing.get_full_user_map(file_path)
+
+    context_files = malan.utils.path_to_list(file_path, key_word='context')
+    rd = reader.Reader(context_files, config)
+
+    module = CustomModule
+
     dataset = rd.dataset(tensor_types=(tf.float32, tf.int64),
-                         sample_deal_func = sample_func, generator_limit=None,
+                         sample_deal_func = module.sample_func, generator_limit=None,
                          batch_size = config['batch_size'])
 
     iterator = dataset.make_initializable_iterator()
@@ -115,9 +167,11 @@ def start_training(config):
         for step in range(100000):
             step_time = 0
             step_start_time = time.time()
-            sess.run(update)
+            #sess.run(update)
+            print(sess.run(next_batch))
             step_time += time.time() - step_start_time
             duration = time.time() - start_time
+            continue
 
 
             if step % config['benchmark_interval']:
@@ -149,6 +203,7 @@ if __name__ == "__main__":
         'save_interval': 2000,
         'emb_size': 8,
         'feature_num': 11,
+        'vid_window_size': 5,
     }
     try:
         start_training(config)
