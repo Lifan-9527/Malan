@@ -55,11 +55,11 @@ class Reader(object):
         for idx, a_file in enumerate(self.filenames):
             print('ready to deal with file: {}, schedule: {}'.format(a_file, idx/len(self.filenames)))
             df = load_data(a_file)
-            datas = df.values
             idx = 0
-            num_samples = datas.shape[0]
+            num_samples = df.values.shape[0]
             while idx < num_samples:
-                features = gen_func(datas[idx])
+                s = df[idx : idx+1]
+                features = gen_func(s)
                 if features == None:
                     idx += 1
                     continue

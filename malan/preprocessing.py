@@ -17,6 +17,7 @@ except:
 
 import  traceback
 import time, os
+from multiprocessing import Queue, Process
 
 def map_user_to_vids(user_list):
     user2vids_dict = dict()
@@ -56,7 +57,11 @@ def get_user_watch_map(uids, watches):
 
     return uid_vid_map
 
-def get_full_user_map(path):
+def get_full_user_map(path, num_parallel_reads=None):
+    assert isinstance(num_parallel_reads, int), "invalid type of num_parallel_reads."
+    if num_parallel_reads > 1:
+        return _get_full_user_map_parallel(path, num_parallel_reads)
+
     filenames = utils.path_to_list(path, key_word='user')
     full_uid_vid_map = dict()
     for i, a_file in enumerate(filenames):
@@ -66,3 +71,31 @@ def get_full_user_map(path):
         uid_vid_map = get_user_watch_map(uids, watches)
         full_uid_vid_map.update(uid_vid_map)
     return full_uid_vid_map
+
+def _get_full_user_map_parallel(path, num_parallel_reads):
+    filenames = utils.path_to_list(path, key_word='user')
+    para = min(len(filenames), num_parallel_reads)
+
+    full_uid_vid_map = dict()
+
+    channels = [Queue(maxsize=1) for _ in range(para)]
+
+    def functor(idx, q, sub_filenames):
+        collector = dict()
+        for i, a_file in enumerate(filenames):
+            df = reader.load_data(a_file)
+            uids = df.did.values
+            watches = df.watch.values
+            uid_vid_map = get_user_watch_map(uids, watches)
+            full_uid_vid_map.update(uid_vid_map)
+            collector.update(full_uid_vid_map)
+        q.put(collector, block=True)
+    procs = [Process(target=functor, args=(i, channels[i], filenames[i::para])) for i in range(para)]
+    for x in procs:
+        x.start()
+
+    full_collector = dict()
+    for i in range(para):
+        sub_map = channels[i].get(block=True)
+        full_collector.update(sub_map)
+    return full_collector
