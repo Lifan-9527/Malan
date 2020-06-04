@@ -40,23 +40,31 @@ class Trainer(object):
         #features = tf.reshape(features, (self.batch_size, -1))
         
         features = tf.reshape(features, [self.batch_size * self.feature_num, 1])
+        features = tf.reshape(features, [-1, 1])
         self.ctx_var = rest.SparseVariable(
             features=features,
             dim=self.embedding_size,
-            devices="/CPU:0",
+            devices=self.config['sparse_placement'],
             check_interval=1000,
             use_default=False,
             name="ctx_var",
         )
 
-        sparse_embedding = tf.reshape(self.ctx_var.op, [-1, 1])
+        print('check ctx_var.op: ', self.ctx_var.op.shape)
 
-        indices = [0] * self.embedding_size * self.batch_size * self.feature_num
-        for i in range(len(indices)):
-            indices[i] = int(i / (self.embedding_size *  self.feature_num))
+        sparse_embedding = tf.reshape(self.ctx_var.op, [self.batch_size, self.feature_num, self.embedding_size])
 
-        category = tf.math.segment_sum(sparse_embedding, indices)
-        category = tf.reshape(category, (self.batch_size, 1))
+        sparse_embedding = tf.reduce_sum(sparse_embedding, axis=1)
+
+        print('check sparse_embedding: ', sparse_embedding.shape)
+
+        #indices = [0] * self.embedding_size * self.batch_size * self.feature_num
+        #for i in range(len(indices)):
+        #    indices[i] = int(i / (self.embedding_size *  self.feature_num))
+
+        category = tf.reshape(sparse_embedding, (-1, self.embedding_size))
+
+        print('check category: ', category.shape)
 
         deep = self.fc(category,
                 0,
@@ -117,7 +125,6 @@ class CustomModule(object):
 
     def sample_func(self, sample):
         """
-
         :param sample:
         :param args:
         :return: features
@@ -170,31 +177,40 @@ def start_training(config):
 
     module = CustomModule(user_uid_vid_map, config)
 
-    dataset = rd.dataset(tensor_types=(tf.float32, tf.int64),
-                         sample_deal_func = module.sample_func, generator_limit=None,
-                         batch_size = config['batch_size'])
+    with tf.device('/CPU:0'):
+        dataset = rd.dataset(tensor_types=(tf.float32, tf.int64),
+                             sample_deal_func = module.sample_func, generator_limit=None,
+                             batch_size = config['batch_size'])
 
-    iterator = dataset.make_initializable_iterator()
-    init = iterator.initializer
-    next_batch = iterator.get_next()
+        iterator = dataset.make_initializable_iterator()
+        init = iterator.initializer
+        next_batch = iterator.get_next()
 
-    trainer = Trainer(config)
-    #labels, predict, loss, auc, update = trainer.build_graph(next_batch)
-    with tf.Session() as sess:
+    with tf.device('/GPU:0'):
+        trainer = Trainer(config)
+        labels, predict, loss, auc, update = trainer.build_graph(next_batch)
+
+    sess_config = tf.ConfigProto()
+    sess_config.allow_soft_placement = True
+    sess_config.gpu_options.allow_growth = True
+    sess_config.log_device_placement = False
+    sess_config.intra_op_parallelism_threads = 40
+    sess_config.inter_op_parallelism_threads = 20
+
+    with tf.Session(config=sess_config) as sess:
         sess.run(init)
         sess.run(tf.group(tf.global_variables_initializer(), tf.local_variables_initializer()))
         start_time, step_time, step_start_time, duration = time.time(), 0, 0, 0
-        for step in range(4):
+        for step in range(10000):
             step_time = 0
             step_start_time = time.time()
-            #sess.run(update)
-            _lb, _ft = sess.run(next_batch)
-            print('check next_batch = ', _lb.shape, _ft.shape)
+            sess.run(update)
+            #_lb, _ft = sess.run(next_batch)
+            #print('check next_batch = ', _lb.shape, _ft.shape)
             step_time += time.time() - step_start_time
             duration = time.time() - start_time
 
 
-            """
             if step % config['benchmark_interval']:
                 print('[benchmark] step = {}, step_time = {}, duration = {}'.format(step, step_time, duration))
 
@@ -214,7 +230,7 @@ def start_training(config):
                 loss_metric = loss_metric / config['test_interval']
 
                 print('[in-training test] step = {}, auc = {}, loss = {}, feature_num = {}'.format(step, auc_metric, loss_metric, feature_num))
-            """
+
 
 if __name__ == "__main__":
     config = {
@@ -225,8 +241,8 @@ if __name__ == "__main__":
         'test_step': 32,
         'save_interval': 2000,
         'emb_size': 8,
-        'feature_num': 5,
         'vid_window_size': 5,
+        'feature_num': 6,
 
         'num_parallel_preprocess': 1,
 
@@ -234,6 +250,8 @@ if __name__ == "__main__":
         'nn_stddev': [0.04, 0.07, 0.016, 0.016],
         "nn_bias_stddev": [0.04, 0.07, 0.016, 0.016],
         'activation': ['selu', 'selu', 'selu', None],
+
+        'sparse_placement': '/GPU:0',
     }
 
     try:
