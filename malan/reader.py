@@ -53,10 +53,12 @@ class Reader(object):
         gen_func = self.sample_func
         assert gen_func != None, "Must use a gen_func to parse the data"
         for idx, a_file in enumerate(self.filenames):
-            print('ready to deal with file: {}, schedule: {}'.format(a_file, idx/len(self.filenames)))
+            print('[info] ready to deal with file: {}, schedule: {}'.format(a_file, idx/len(self.filenames)))
             df = load_data(a_file)
+
             idx = 0
             num_samples = df.values.shape[0]
+            print('[info] file: {} has {} samples.'.format(a_file, num_samples))
             while idx < num_samples:
                 s = df[idx : idx+1]
                 features = gen_func(s)
