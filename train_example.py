@@ -7,6 +7,7 @@ import rest
 import sklearn
 from sklearn.metrics import roc_auc_score, accuracy_score
 from tensorflow.python.ops import data_flow_ops
+from tensorflow.python.client import timeline
 
 try:
     from malan import reader
@@ -45,19 +46,15 @@ class Trainer(object):
         self.ctx_var = rest.SparseVariable(
             features=features,
             dim=self.embedding_size,
-            devices=self.config['sparse_placement'],
+            devices='/GPU:0',
             check_interval=1000,
             use_default=False,
             name="ctx_var",
         )
 
-        print('check ctx_var.op: ', self.ctx_var.op.shape)
-
         sparse_embedding = tf.reshape(self.ctx_var.op, [self.batch_size, self.feature_num, self.embedding_size])
 
         sparse_embedding = tf.reduce_sum(sparse_embedding, axis=1)
-
-        print('check sparse_embedding: ', sparse_embedding.shape)
 
         #indices = [0] * self.embedding_size * self.batch_size * self.feature_num
         #for i in range(len(indices)):
@@ -171,7 +168,10 @@ class CustomModule(object):
 
 def start_training(config):
     file_path = config['file_path']
+
+    sub_t = time.time()
     user_uid_vid_map = malan.preprocessing.get_full_user_map(file_path, num_parallel_reads=config['num_parallel_preprocess'])
+    print('preprocessing user map cost {} sec.'.format(time.time() - sub_t))
 
     context_files = malan.utils.path_to_list(file_path, key_word='context')
     rd = reader.Reader(context_files, config)
@@ -210,6 +210,14 @@ def start_training(config):
     sess_config.intra_op_parallelism_threads = 40
     sess_config.inter_op_parallelism_threads = 20
 
+
+    if config['timeline']:
+        run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        run_metadata = tf.RunMetadata()
+    else:
+        run_options = None
+        run_metadata = None
+
     with tf.Session(config=sess_config) as sess:
         sess.run(init)
         sess.run(tf.group(tf.global_variables_initializer(), tf.local_variables_initializer()))
@@ -221,7 +229,7 @@ def start_training(config):
         for step in range(10000):
             step_time = 0
             step_start_time = time.time()
-            sess.run([stream, update])
+            sess.run([stream, update], run_options=run_options, run_metadata=run_metadata)
             #_lb, _ft = sess.run(next_batch)
             #print('check next_batch = ', _lb.shape, _ft.shape)
             step_time += time.time() - step_start_time
@@ -248,6 +256,17 @@ def start_training(config):
 
                 print('[in-training test] step = {}, auc = {}, loss = {}, feature_num = {}'.format(step, auc_metric, loss_metric, feature_num))
 
+            if config['timeline']:
+                if step in config['timeline_step']:
+                    if step in config['timeline_steps']:
+                        tl = timeline.Timeline(run_metadata.step_stats)
+                        ctf = tl.generate_chrome_trace_format()
+                        with open('./timeline/timeline-step{}-{}.json'.format(step, time.time()), 'w') as f:
+                            f.write(ctf)
+                    elif step > max(config['timeline_steps']):
+                        run_options = None
+                        run_metadata = None
+
 
 if __name__ == "__main__":
 
@@ -262,16 +281,19 @@ if __name__ == "__main__":
         'save_interval': 2000,
         'emb_size': 50,
         'vid_window_size': 20,
-        'feature_num': 21,
+        'feature_num': 20+1,
 
-        'num_parallel_preprocess': 1,
+        'num_parallel_preprocess': 30,
 
-        'nn_size': [1024, 512, 256, 1],
+        'nn_size': [256, 128, 64, 1],
         'nn_stddev': [0.04, 0.07, 0.016, 0.016],
         "nn_bias_stddev": [0.04, 0.07, 0.016, 0.016],
-        'activation': ['selu', 'selu', 'selu', None],
+        'activation': ['selu', 'selu', 'selu', 'selu'],
 
         'sparse_placement': '/GPU:0',
+
+        'timeline': True,
+        'timeline_step': [10, 20, 40],
     }
 
     try:
