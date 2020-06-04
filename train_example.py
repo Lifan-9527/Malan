@@ -6,6 +6,7 @@ import os, time, sys, traceback
 import rest
 import sklearn
 from sklearn.metrics import roc_auc_score, accuracy_score
+from tensorflow.python.ops import data_flow_ops
 
 try:
     from malan import reader
@@ -94,8 +95,8 @@ class Trainer(object):
         entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=label)
         loss = tf.reduce_mean(entropy, name='loss')
         auc, auc_op = tf.metrics.auc(label, predict, num_thresholds=500)
-        sparse_opt = rest.SparseAdagradOptimizer(0.1, initial_accumulator_value=0.000001)
-        dense_opt = tf.train.AdagradOptimizer(0.1, initial_accumulator_value=0.000001)
+        sparse_opt = rest.SparseAdagradOptimizer(0.1, initial_accumulator_value=0.0000001)
+        dense_opt = tf.train.AdagradOptimizer(0.1, initial_accumulator_value=0.0000001)
         update = tf.group([
                            sparse_opt.minimize(loss, var_list=[self.ctx_var]),
                            dense_opt.minimize(loss, var_list=self.dense_weights)])
@@ -178,7 +179,7 @@ def start_training(config):
     module = CustomModule(user_uid_vid_map, config)
 
     with tf.device('/CPU:0'):
-        dataset = rd.dataset(tensor_types=(tf.float32, tf.int64),
+        dataset = rd.dataset(tensor_types=(tf.float32, tf.int32),
                              sample_deal_func = module.sample_func, generator_limit=None,
                              batch_size = config['batch_size'])
 
@@ -186,9 +187,21 @@ def start_training(config):
         init = iterator.initializer
         next_batch = iterator.get_next()
 
+        stage_cpu = data_flow_ops.StagingArea([tf.float32, tf.int32],
+                                              capacity=2)
+        copy_stage_cpu = stage_cpu.put(next_batch)
+
     with tf.device('/GPU:0'):
+        stage_gpu = data_flow_ops.StagingArea([tf.float32, tf.int32],
+                                              capacity=2)
+        copy_stage_gpu = stage_gpu.put(stage_cpu.get())
+        train_data = stage_gpu.get()
+
         trainer = Trainer(config)
-        labels, predict, loss, auc, update = trainer.build_graph(next_batch)
+        labels, predict, loss, auc, update = trainer.build_graph(train_data)
+
+    init_stream = copy_stage_cpu
+    stream = tf.group([copy_stage_cpu, copy_stage_gpu])
 
     sess_config = tf.ConfigProto()
     sess_config.allow_soft_placement = True
@@ -200,11 +213,15 @@ def start_training(config):
     with tf.Session(config=sess_config) as sess:
         sess.run(init)
         sess.run(tf.group(tf.global_variables_initializer(), tf.local_variables_initializer()))
+        sess.run(init_stream)
+        sess.run(stream)
+
         start_time, step_time, step_start_time, duration = time.time(), 0, 0, 0
+
         for step in range(10000):
             step_time = 0
             step_start_time = time.time()
-            sess.run(update)
+            sess.run([stream, update])
             #_lb, _ft = sess.run(next_batch)
             #print('check next_batch = ', _lb.shape, _ft.shape)
             step_time += time.time() - step_start_time
@@ -219,30 +236,33 @@ def start_training(config):
                 loss_metric, auc_metric = 0, 0
                 feature_num = sess.run(trainer.ctx_var.size())
                 for _ in range(config['test_step']):
-                    _lb, _pred, _auc, _loss = sess.run([labels, predict, auc, loss])
+                    _, _lb, _pred, _auc, _loss = sess.run([stream, labels, predict, auc, loss])
                     #print('check: ', _auc, _loss)
 
                     #auc_metric += roc_auc_score_FIXED(np.asarray(_lb), np.asarray(_pred))
                     auc_metric += _auc
                     loss_metric += _loss
                     #loss_metric += sklearn.metrics.log_loss(np.asarray(_lb), np.asarray(_pred))
-                auc_metric = auc_metric / config['test_interval']
-                loss_metric = loss_metric / config['test_interval']
+                auc_metric = auc_metric / config['test_step']
+                loss_metric = loss_metric / config['test_step']
 
                 print('[in-training test] step = {}, auc = {}, loss = {}, feature_num = {}'.format(step, auc_metric, loss_metric, feature_num))
 
 
 if __name__ == "__main__":
+
+    history_vid_num = 20,
+
     config = {
         'file_path': './storage/dataset/train/part_1',
         'batch_size': 2048,
         'benchmark_interval': 10,
-        'test_interval': 100,
+        'test_interval': 10,
         'test_step': 32,
         'save_interval': 2000,
-        'emb_size': 8,
-        'vid_window_size': 5,
-        'feature_num': 6,
+        'emb_size': 50,
+        'vid_window_size': 20,
+        'feature_num': 21,
 
         'num_parallel_preprocess': 1,
 
