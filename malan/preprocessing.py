@@ -7,7 +7,10 @@ Deal with the discrete terms in the data.
 
 import numpy as np
 import json
+import pickle
+from subprocess import getstatusoutput
 #import malan
+
 try:
     import utils
     import reader
@@ -59,17 +62,20 @@ def get_user_watch_map(uids, watches):
 
 def get_full_user_map(path, num_parallel_reads=None):
     assert isinstance(num_parallel_reads, int), "invalid type of num_parallel_reads."
-    if num_parallel_reads > 1:
-        return _get_full_user_map_parallel(path, num_parallel_reads)
 
-    filenames = utils.path_to_list(path, key_word='user')
-    full_uid_vid_map = dict()
-    for i, a_file in enumerate(filenames):
-        df = reader.load_data(a_file)
-        uids = df.did.values
-        watches = df.watch.values
-        uid_vid_map = get_user_watch_map(uids, watches)
-        full_uid_vid_map.update(uid_vid_map)
+    if num_parallel_reads > 1:
+        full_uid_vid_map = _get_full_user_map_parallel(path, num_parallel_reads)
+
+    else:
+        filenames = utils.path_to_list(path, key_word='user')
+        full_uid_vid_map = dict()
+        for i, a_file in enumerate(filenames):
+            df = reader.load_data(a_file)
+            uids = df.did.values
+            watches = df.watch.values
+            uid_vid_map = get_user_watch_map(uids, watches)
+            full_uid_vid_map.update(uid_vid_map)
+
     return full_uid_vid_map
 
 def _get_full_user_map_parallel(path, num_parallel_reads):
@@ -78,7 +84,7 @@ def _get_full_user_map_parallel(path, num_parallel_reads):
 
     full_uid_vid_map = dict()
 
-    channels = [Queue(maxsize=1) for _ in range(para)]
+    channel = Queue(maxsize=para)
 
     def functor(idx, q, sub_filenames):
         collector = dict()
@@ -89,13 +95,47 @@ def _get_full_user_map_parallel(path, num_parallel_reads):
             uid_vid_map = get_user_watch_map(uids, watches)
             full_uid_vid_map.update(uid_vid_map)
             collector.update(full_uid_vid_map)
+        status, output = getstatusoutput('free -g')
+        print('done with sub_files: {}, mem:\n{}'.format(sub_filenames, output))
         q.put(collector, block=True)
-    procs = [Process(target=functor, args=(i, channels[i], filenames[i::para])) for i in range(para)]
+        status, output = getstatusoutput('free -g')
+        print('put into queue, mem: {}'.format(output))
+    procs = [Process(target=functor, args=(i, channel, filenames[i::para])) for i in range(para)]
     for x in procs:
         x.start()
 
     full_collector = dict()
     for i in range(para):
-        sub_map = channels[i].get(block=True)
+        sub_map = channel.get(block=True)
         full_collector.update(sub_map)
+        status, output = getstatusoutput('free -g')
+        print('collect {}th map, mem: {}'.format(i, output))
     return full_collector
+
+def precache_user_map(path, cache_file, num_parallel_precache):
+    full_user_map = get_full_user_map(path, num_parallel_reads=num_parallel_precache)
+    with open(cache_file, 'wb') as f_save:
+        pickle.dump(full_user_map, f_save)
+
+def load_user_map_from_cache(cache_file):
+    assert os.path.exists(cache_file), 'cache_file: {} do not exists'.format(cache_file)
+    with open(cache_file, 'rb') as f:
+        full_user_map = pickle.load(f)
+
+    return full_user_map
+
+def precache_context(source_path, target_path, num_parallel_precache):
+    """
+    Cache a context to: label, [vid1, ..., vidn, vid_chosen] format. vids are chosen by timestamp in user watch info.
+    :param source_path: A string, indicates the path pointed to the directory store the parquet files.
+    :param target_path: A string, indicates the path that save the
+            cache files. if the dir not exist, create one (recursively).
+    :param num_parallel_precache: int. number of caching concurrently.
+            It will not exceed the number of context files.
+    :return: List. Two lists of names of the cached files.
+            [labels.pickle, ... , labels.pickle], [vids.pickle, ... , vids.pickle].
+    """
+    # Prepare the directory.
+    #
+
+
