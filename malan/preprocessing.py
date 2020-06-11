@@ -22,10 +22,12 @@ import  traceback
 import time, os
 from multiprocessing import Queue, Process
 
+
 def map_user_to_vids(user_list):
     user2vids_dict = dict()
     user_list_arr = np.asarray(user_list)
     unique_user = np.unique(user_list_arr)
+
 
 def parse_user_watch_info(pair_string):
     """
@@ -45,6 +47,7 @@ def parse_user_watch_info(pair_string):
 
         return pair_data
 
+
 def get_user_watch_map(uids, watches):
     """
 
@@ -59,6 +62,7 @@ def get_user_watch_map(uids, watches):
         uid_vid_map[uid] = parse_user_watch_info(watches[i])
 
     return uid_vid_map
+
 
 def get_full_user_map(path, num_parallel_reads=None):
     assert isinstance(num_parallel_reads, int), "invalid type of num_parallel_reads."
@@ -77,6 +81,7 @@ def get_full_user_map(path, num_parallel_reads=None):
             full_uid_vid_map.update(uid_vid_map)
 
     return full_uid_vid_map
+
 
 def _get_full_user_map_parallel(path, num_parallel_reads):
     filenames = utils.path_to_list(path, key_word='user')
@@ -112,10 +117,12 @@ def _get_full_user_map_parallel(path, num_parallel_reads):
         print('collect {}th map, mem: {}'.format(i, output))
     return full_collector
 
+
 def precache_user_map(path, cache_file, num_parallel_precache):
     full_user_map = get_full_user_map(path, num_parallel_reads=num_parallel_precache)
     with open(cache_file, 'wb') as f_save:
         pickle.dump(full_user_map, f_save)
+
 
 def load_user_map_from_cache(cache_file):
     assert os.path.exists(cache_file), 'cache_file: {} do not exists'.format(cache_file)
@@ -124,20 +131,106 @@ def load_user_map_from_cache(cache_file):
 
     return full_user_map
 
-def precache_context(source_path, target_path, num_parallel_precache):
+
+def precache_item_map(path, cache_file, num_parallel_precache=1):
     """
-    Cache a context to: label, [vid1, ..., vidn, vid_chosen] format. vids are chosen by timestamp in user watch info.
-    :param source_path: A string, indicates the path pointed to the directory store the parquet files.
-    :param target_path: A string, indicates the path that save the
-            cache files. if the dir not exist, create one (recursively).
-    :param num_parallel_precache: int. number of caching concurrently.
-            It will not exceed the number of context files.
-    :return: List. Two lists of names of the cached files.
-            [labels.pickle, ... , labels.pickle], [vids.pickle, ... , vids.pickle].
+    Cache the item to a map structure.
+    In result, key is vid from context. value is a int64 vector contains:
+    {vid : [vid, cid, title_length, class_id, second_class, is_intact, stars]}
+    with {int : numpy.ndarray 1*7}
+
+    :param path:
+    :param cache_file:
+    :param num_parallel_precache:
+    :return:
     """
-    # Prepare the directory.
-    #
-    #TODO
+    filenames = utils.path_to_list(path, key_word='item')
+    q = Queue(maxsize=num_parallel_precache)
+    para = min(num_parallel_precache, len(filenames))
+
+    def sub_proc(sub_filenames, q, idx):
+        for _, a_file in enumerate(sub_filenames):
+            df = reader.load_data(a_file)
+
+            vid = np.asarray(df.vid.values, dtype=np.int64)
+            cid = np.asarray(df.cid.values, dtype=np.int64)
+            title_length = np.asarray(df.title_length.values, dtype=np.int64)
+            class_id = np.asarray(df.class_id.values, dtype=np.int64)
+            second_class = np.asarray(df.second_class.values, dtype=np.int64)
+            is_intact = np.asarray(df.is_intact.values, dtype=np.int64)
+            stars = df.stars.values
+
+            sample_member = [vid, cid, title_length, class_id, second_class, is_intact, stars]
+
+            sub_item_map = dict()
+            collector = dict()
+
+            for i,k in enumerate(vid):
+                sample = [vid[i], cid[i], title_length[i], class_id[i], second_class[i], is_intact[i]]
+                sample = np.asarray(sample, dtype=np.int64)
+                sample = np.concatenate([sample, stars[i]])
+                #print(sample, type(sample), sample.dtype)
+                sub_item_map[k] = sample
+                collector.update(sub_item_map)
+
+            q.put(collector, block=True, timeout=False)
+
+    proc_ent = [Process(target=sub_proc, args=(filenames[_i::para], q, _i)) for _i in range(para)]
+    for x in proc_ent:
+        x.start()
+
+    all_item_map = dict()
+    for i in range(para):
+        sub_collector = q.get(block=True, timeout=None)
+        all_item_map.update(sub_collector)
+
+    with open(cache_file, 'wb') as f_save:
+        pickle.dump(all_item_map, f_save)
+
+    return cache_file
+
+
+def load_item_map(cache_file):
+    """
+    Load the item map.
+    :param cache_file:
+    :return:
+    """
+    with open(cache_file, 'rb') as f:
+        full_item_map = pickle.load(f)
+    return full_item_map
+
+
+def get_vid_to_cid_map_from_item(path=None, cache_file=None, num_parallel_reads=1):
+    """
+
+    :param path:
+    :param cache_file:
+    :param num_parallel_reads:
+    :return:
+    """
+    if not cache_file:
+        raise NotImplementedError
+    item_map = load_item_map(cache_file)
+    for k, v in item_map.items():
+        item_map[k] = v[1]
+    vid_cid_map = item_map
+    return vid_cid_map
+
+
+def precache_context_to_samples(source_path, target_path, num_parallel_precache=1):
+    """
+    Unlike item and user info, samples from context are stored in shard files.
+    According to two-tower structure
+    sample are stored as:
+        block1: vid, prev, mod, mf, aver, sver, region, index, vids_from_did
+        block2: features_from_item_info
+    block1 and block2 are stitched as a sample, while they separately fed to
+    left and right tower.
+
+    :param source_path: where the context file stored.
+    :param target_path: Directory used for caching.
+    :param num_parallel_precache:
+    :return:
+    """
     pass
-
-
